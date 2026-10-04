@@ -4,3 +4,4 @@ yt-dlp
 instaloader
 supabase
 requests
+httpx
