@@ -13,18 +13,20 @@ from pyrogram import Client, filters, idle
 from pyrogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo,
 )
-from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, PeerIdInvalid
+import httpx
 
 import db
 import downloader
 
 logging.basicConfig(level=logging.INFO)
 
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+
 app = Client(
     "insta_bot",
     api_id=int(os.environ["API_ID"]),
     api_hash=os.environ["API_HASH"],
-    bot_token=os.environ["BOT_TOKEN"],
+    bot_token=BOT_TOKEN,
     in_memory=True,
 )
 
@@ -98,6 +100,32 @@ async def bc_cb(c, q):
         await q.answer()
 
 
+http = httpx.AsyncClient(timeout=30)
+
+
+async def tg_copy(uid, chat, msg_id):
+    """Copy via Bot API (works for every user who started the bot, even after restart).
+    Returns 'ok' | 'blocked' | 'fail'."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/copyMessage"
+    for _ in range(3):
+        try:
+            r = await http.post(url, json={"chat_id": uid, "from_chat_id": chat, "message_id": msg_id})
+            d = r.json()
+        except Exception:
+            await asyncio.sleep(1)
+            continue
+        if d.get("ok"):
+            return "ok"
+        if d.get("error_code") == 429:
+            await asyncio.sleep(d.get("parameters", {}).get("retry_after", 1) + 1)
+            continue
+        if d.get("error_code") == 403:  # user blocked the bot / deactivated
+            return "blocked"
+        logging.warning("copyMessage %s -> %s", uid, d.get("description"))
+        return "fail"
+    return "fail"
+
+
 async def run_broadcast(c, chat, msg_id, status):
     try:
         ids = await db.active_user_ids()
@@ -108,20 +136,13 @@ async def run_broadcast(c, chat, msg_id, status):
         return await status.edit_text("❌ Koi active user nahi mila.")
     sent = failed = blocked = 0
     for i, uid in enumerate(ids, 1):
-        try:
-            await c.copy_message(uid, chat, msg_id)
+        res = await tg_copy(uid, chat, msg_id)
+        if res == "ok":
             sent += 1
-        except FloodWait as e:
-            await asyncio.sleep(e.value + 1)
-            try:
-                await c.copy_message(uid, chat, msg_id)
-                sent += 1
-            except Exception:
-                failed += 1
-        except (UserIsBlocked, InputUserDeactivated, PeerIdInvalid):
+        elif res == "blocked":
             blocked += 1
             await db.set_inactive(uid)
-        except Exception:
+        else:
             failed += 1
         await asyncio.sleep(0.04)  # ~25 msg/sec
         if i % 100 == 0:
