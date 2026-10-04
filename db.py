@@ -30,7 +30,11 @@ from datetime import datetime, timezone
 
 from supabase import create_client
 
-sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])  # service_role key
+SUPABASE_URL = os.environ["SUPABASE_URL"].strip().strip("\"'")
+SUPABASE_KEY = os.environ["SUPABASE_KEY"].strip().strip("\"'")
+if not SUPABASE_URL.startswith("http"):
+    SUPABASE_URL = "https://" + SUPABASE_URL
+sb = create_client(SUPABASE_URL, SUPABASE_KEY)  # service_role / secret key
 
 DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "20"))
 COOLDOWN = int(os.getenv("COOLDOWN", "5"))
