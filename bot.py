@@ -52,6 +52,7 @@ async def start(c, m):
     kb = None
     if m.from_user.id in db.ADMIN_IDS:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Broadcast", callback_data="bc_start")]])
+        await set_menu(m.from_user.id)
     await m.reply_text("👋 Instagram Reel ya Image ka link bhejo, main download kar dunga.", reply_markup=kb)
 
 
@@ -61,7 +62,33 @@ async def cancel(c, m):
     await m.reply_text("Cancelled.")
 
 
-@app.on_message(filters.private & waiting & ~filters.command(["start", "cancel"]), group=-1)
+ADMIN_ONLY = filters.private & filters.user(list(db.ADMIN_IDS))
+
+
+@app.on_message(filters.command("status") & ADMIN_ONLY)
+async def status_cmd(c, m):
+    s = await db.stats_24h()
+    if not s:
+        return await m.reply_text("❌ Stats load nahi hue, logs check karo.")
+    await m.reply_text(
+        "📊 Last 24 hours\n\n"
+        f"👥 Active users: {s['active']}\n"
+        f"🆕 New users: {s['new']}\n"
+        f"⬇️ Downloads: {s['ok']} ✅ / {s['bad']} ❌\n\n"
+        f"Total users: {s['total']}"
+    )
+
+
+@app.on_message(filters.command("broadcast") & ADMIN_ONLY)
+async def broadcast_cmd(c, m):
+    admin_state[m.from_user.id] = "wait"
+    await m.reply_text("📢 Ab wo post bhejo jo sabko bhejna h (image + caption + link).\nCancel: /cancel")
+
+
+@app.on_message(
+    filters.private & waiting & ~filters.command(["start", "cancel", "status", "broadcast"]),
+    group=-1,
+)
 async def capture_post(c, m):
     uid = m.from_user.id
     admin_state[uid] = {"chat": m.chat.id, "msg": m.id}
@@ -101,6 +128,28 @@ async def bc_cb(c, q):
 
 
 http = httpx.AsyncClient(timeout=30)
+
+USER_CMDS = [{"command": "start", "description": "Bot start karo"}]
+ADMIN_CMDS = [
+    {"command": "broadcast", "description": "📢 Sabko post bhejo"},
+    {"command": "status", "description": "📊 Last 24h stats"},
+    {"command": "cancel", "description": "❌ Cancel"},
+]
+
+
+async def set_menu(admin_id=None):
+    """Default menu for everyone + extra admin commands only in admins' chats (Bot API, no peer cache needed)."""
+    api = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"
+    try:
+        if admin_id is None:
+            await http.post(api, json={"commands": USER_CMDS})
+        for a in ([admin_id] if admin_id else db.ADMIN_IDS):
+            await http.post(api, json={
+                "commands": USER_CMDS + ADMIN_CMDS,
+                "scope": {"type": "chat", "chat_id": a},
+            })
+    except Exception:
+        logging.exception("set_menu failed")
 
 
 async def tg_copy(uid, chat, msg_id):
@@ -170,7 +219,7 @@ async def send_files(m, files):
     await m.reply_media_group(media)
 
 
-@app.on_message(filters.private & filters.text & ~filters.command(["start", "cancel"]))
+@app.on_message(filters.private & filters.text & ~filters.command(["start", "cancel", "status", "broadcast"]))
 async def on_link(c, m):
     uid = m.from_user.id
     p = downloader.parse(m.text)
@@ -216,6 +265,7 @@ async def on_link(c, m):
 
 async def main():
     await app.start()
+    await set_menu()
     logging.info("Bot started")
     await idle()
     await app.stop()
