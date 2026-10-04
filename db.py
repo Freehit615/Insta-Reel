@@ -26,7 +26,7 @@ create index on usage_logs (user_id, created_at);
 import os
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from supabase import create_client
 
@@ -106,6 +106,33 @@ async def active_user_ids():
             start += 1000
         return ids
     return await asyncio.to_thread(f)
+
+
+async def stats_24h():
+    """Active users (any interaction), new users, downloads ok/failed in last 24h + total users."""
+    def f():
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+
+        def cnt(table, col, **flt):
+            q = sb.table(table).select(col, count="exact")
+            for k, v in flt.get("eq", {}).items():
+                q = q.eq(k, v)
+            if "gte" in flt:
+                q = q.gte(*flt["gte"])
+            return q.execute().count or 0
+
+        return {
+            "active": cnt("users", "user_id", gte=("last_active", since)),
+            "new": cnt("users", "user_id", gte=("joined_at", since)),
+            "total": cnt("users", "user_id"),
+            "ok": cnt("usage_logs", "id", eq={"status": "success"}, gte=("created_at", since)),
+            "bad": cnt("usage_logs", "id", eq={"status": "failed"}, gte=("created_at", since)),
+        }
+    try:
+        return await asyncio.to_thread(f)
+    except Exception:
+        logging.exception("stats_24h failed")
+        return None
 
 
 async def set_inactive(uid):
