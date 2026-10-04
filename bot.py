@@ -99,7 +99,13 @@ async def bc_cb(c, q):
 
 
 async def run_broadcast(c, chat, msg_id, status):
-    ids = await db.active_user_ids()
+    try:
+        ids = await db.active_user_ids()
+    except Exception as e:
+        logging.exception("broadcast: user list failed")
+        return await status.edit_text(f"❌ Users load nahi hue: {e}")
+    if not ids:
+        return await status.edit_text("❌ Koi active user nahi mila.")
     sent = failed = blocked = 0
     for i, uid in enumerate(ids, 1):
         try:
